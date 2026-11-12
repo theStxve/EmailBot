@@ -1,117 +1,87 @@
 package com.example.emailbot.scheduler
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
+import android.Manifest
 import android.app.Service
+import android.content.pm.PackageManager
+import android.os.Build
 import android.content.Context
 import android.content.Intent
-import android.os.Build
+import android.content.pm.ServiceInfo
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
-import com.example.emailbot.R
+import android.util.Log
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.example.emailbot.data.EmailTaskRepository
+import com.example.emailbot.data.isActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * Foreground service that keeps the scheduling engine alive even on aggressive
- * battery-saving devices (Samsung, Xiaomi, Huawei etc.).
+ * Low-priority foreground service that runs while at least one schedule is active.
  *
- * It runs a lightweight heartbeat loop every 60 seconds to:
- * 1. Re-verify all active alarms are still registered (AlarmManager can lose
- *    alarms on some OEM ROMs after power-save mode kicks in).
- * 2. Provide a persistent notification so Android never kills this process.
+ * The alarms work without it. Its only job is to keep the process "important" on
+ * OEM ROMs (Samsung, Xiaomi, Huawei …) that otherwise kill background apps and
+ * drop their alarms. It stops itself as soon as nothing is scheduled.
  */
 class EmailSchedulerService : Service() {
 
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     companion object {
-        const val CHANNEL_ID  = "emailbot_scheduler"
-        const val NOTIF_ID    = 1001
+        private const val TAG = "EmailSchedulerService"
 
-        fun start(context: Context) {
-            val intent = Intent(context, EmailSchedulerService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+        /** Starts the service if any schedule is active. The service stops itself otherwise. */
+        suspend fun sync(context: Context) {
+            if (EmailTaskRepository(context).getActiveTasks().isEmpty()) return
+            try {
+                ContextCompat.startForegroundService(context, Intent(context, EmailSchedulerService::class.java))
+            } catch (e: Exception) {
+                // Android 12+ forbids starting it from some background contexts. The alarms still work.
+                Log.w(TAG, "Could not start service: ${e.message}")
             }
-        }
-
-        fun stop(context: Context) {
-            context.stopService(Intent(context, EmailSchedulerService::class.java))
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
-        startForeground(NOTIF_ID, buildNotification("E-Mail Scheduler aktiv"))
-        startHeartbeat()
+        Notifications.createChannels(this)
+        ServiceCompat.startForeground(
+            this,
+            Notifications.ID_SCHEDULER,
+            Notifications.scheduler(this, 0),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
+
+        scope.launch {
+            EmailTaskRepository(applicationContext).tasks
+                .map { tasks -> tasks.count { it.isActive } }
+                .distinctUntilChanged()
+                .collect { count ->
+                    if (count == 0) {
+                        stopSelf()
+                    } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                        ContextCompat.checkSelfPermission(this@EmailSchedulerService, Manifest.permission.POST_NOTIFICATIONS) ==
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        NotificationManagerCompat.from(this@EmailSchedulerService)
+                            .notify(Notifications.ID_SCHEDULER, Notifications.scheduler(this@EmailSchedulerService, count))
+                    }
+                }
+        }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Restart automatically if killed
-        return START_STICKY
-    }
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
-    }
-
-    /**
-     * Every 15 seconds: update the notification with the current number of active schedules.
-     * We do NOT reschedule alarms here to avoid hitting Android's rate limits for exact alarms.
-     */
-    private fun startHeartbeat() {
-        scope.launch {
-            val repo = EmailTaskRepository(applicationContext)
-            while (true) {
-                try {
-                    val active = repo.getActiveTasks()
-                    updateNotification("${active.size} E-Mail-Zeitplan(e) aktiv")
-                } catch (_: Exception) { }
-                delay(15_000L)
-            }
-        }
-    }
-
-    private fun updateNotification(text: String) {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIF_ID, buildNotification(text))
-    }
-
-    private fun buildNotification(text: String): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("EmailBot")
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .setSilent(true)
-            .build()
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "E-Mail Scheduler",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Hält den E-Mail-Zeitplan im Hintergrund aktiv"
-                setShowBadge(false)
-            }
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(channel)
-        }
     }
 }

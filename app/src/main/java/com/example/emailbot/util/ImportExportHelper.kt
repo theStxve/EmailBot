@@ -7,7 +7,14 @@ import com.example.emailbot.data.EmailTask
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
+/**
+ * Backup as a JSON list of tasks. SMTP accounts and passwords are deliberately left out.
+ * Attachments are too: on import, tasks whose attachment file is missing lose the attachment.
+ */
 object ImportExportHelper {
 
     private val json = Json {
@@ -16,33 +23,18 @@ object ImportExportHelper {
         encodeDefaults = true
     }
 
-    fun exportTasks(context: Context, tasks: List<EmailTask>): Uri? {
-        return try {
-            val cacheDir = File(context.cacheDir, "exports")
-            if (!cacheDir.exists()) {
-                cacheDir.mkdirs()
-            }
-            cacheDir.listFiles()?.forEach { it.delete() }
+    fun exportTasks(context: Context, tasks: List<EmailTask>): Uri? = runCatching {
+        val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+        dir.listFiles()?.forEach { it.delete() }
+        val date = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())
+        val file = File(dir, "emailbot-backup-$date.json")
+        file.writeText(json.encodeToString(ListSerializer(EmailTask.serializer()), tasks), Charsets.UTF_8)
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    }.getOrNull()
 
-            val file = File(cacheDir, "emailbot_backup.json")
-            val jsonString = json.encodeToString(ListSerializer(EmailTask.serializer()), tasks)
-            file.writeText(jsonString, Charsets.UTF_8)
-
-            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
-    }
-
-    fun importTasks(context: Context, uri: Uri): List<EmailTask>? {
-        return try {
-            val inputStream = context.contentResolver.openInputStream(uri)
-            val jsonString = inputStream?.bufferedReader()?.use { it.readText() } ?: return null
-            json.decodeFromString(ListSerializer(EmailTask.serializer()), jsonString)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
-    }
+    fun importTasks(context: Context, uri: Uri): List<EmailTask>? = runCatching {
+        val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            ?: return null
+        json.decodeFromString(ListSerializer(EmailTask.serializer()), text)
+    }.getOrNull()
 }

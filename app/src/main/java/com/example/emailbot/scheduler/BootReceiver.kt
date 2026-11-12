@@ -1,5 +1,6 @@
 package com.example.emailbot.scheduler
 
+import android.app.AlarmManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -9,27 +10,34 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
- * Restores all active scheduled alarms after a device reboot.
- * Without this, AlarmManager alarms are lost on reboot.
+ * Re-registers all alarms whenever they may have been lost or become wrong:
+ * after a reboot, an app update, a clock or time zone change, or when the
+ * exact-alarm permission is granted.
  */
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED &&
-            intent.action != "android.intent.action.QUICKBOOT_POWERON") return
+        if (intent.action !in HANDLED_ACTIONS) return
 
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val repo = EmailTaskRepository(context)
-                repo.getActiveTasks().forEach { task ->
-                    EmailScheduler.schedule(context, task)
-                }
-                // Also restart the foreground service after reboot
-                EmailSchedulerService.start(context)
+                EmailTaskRepository(context).getActiveTasks().forEach { EmailScheduler.schedule(context, it) }
+                EmailSchedulerService.sync(context)
             } finally {
                 pendingResult.finish()
             }
         }
+    }
+
+    private companion object {
+        val HANDLED_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            "android.intent.action.QUICKBOOT_POWERON",
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            Intent.ACTION_TIME_CHANGED,
+            Intent.ACTION_TIMEZONE_CHANGED,
+            AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED
+        )
     }
 }

@@ -3,25 +3,24 @@ package com.example.emailbot.widget
 import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.glance.Button
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.action.actionStartActivity
+import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
-import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
-import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
-import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -31,9 +30,10 @@ import com.example.emailbot.data.EmailLog
 import com.example.emailbot.data.EmailStatus
 import com.example.emailbot.data.EmailTask
 import com.example.emailbot.data.EmailTaskRepository
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.example.emailbot.data.displayTitle
+import com.example.emailbot.data.isActive
+import com.example.emailbot.scheduler.EmailScheduler
+import com.example.emailbot.ui.formatRelative
 
 class EmailBotWidget : GlanceAppWidget() {
 
@@ -41,60 +41,47 @@ class EmailBotWidget : GlanceAppWidget() {
         val repo = EmailTaskRepository(context.applicationContext)
 
         provideContent {
-            val tasks by produceState(initialValue = emptyList<EmailTask>()) {
-                repo.tasks.collect { value = it }
-            }
-            val logs by produceState(initialValue = emptyList<EmailLog>()) {
-                repo.logs.collect { value = it }
-            }
+            val tasks by produceState(initialValue = emptyList<EmailTask>()) { repo.tasks.collect { value = it } }
+            val logs by produceState(initialValue = emptyList<EmailLog>()) { repo.logs.collect { value = it } }
 
-            val activeCount = tasks.count { it.isEnabled && it.status == EmailStatus.PENDING }
-            val lastLog = logs.firstOrNull { it.status == EmailStatus.SENT }
+            val active = tasks.filter { it.isActive }
+            val next = active.minByOrNull { EmailScheduler.nextTriggerMs(it) }
+            val lastLog = logs.firstOrNull()
 
-            val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-            val lastSentStr = if (lastLog != null && lastLog.sentTimeMs > 0) {
-                "${lastLog.taskLabel.ifBlank { lastLog.subject.ifBlank { "E-Mail" } }} (${sdf.format(Date(lastLog.sentTimeMs))})"
-            } else {
-                "Keine"
-            }
+            val white = ColorProvider(Color.White)
+            val soft = ColorProvider(Color(0xFFC7D2FE))
 
             Column(
                 modifier = GlanceModifier
                     .fillMaxSize()
-                    .background(ColorProvider(android.graphics.Color.parseColor("#1E1B4B")))
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalAlignment = Alignment.Start
+                    .cornerRadius(24.dp)
+                    .background(Color(0xFF3730A3))
+                    .padding(16.dp)
+                    .clickable(actionStartActivity<MainActivity>()),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "EmailBot",
-                    style = TextStyle(
-                        color = ColorProvider(android.graphics.Color.WHITE),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    )
+                    if (active.size == 1) "1 aktiver Zeitplan" else "${active.size} aktive Zeitpläne",
+                    style = TextStyle(color = soft, fontSize = 12.sp)
                 )
-                Spacer(modifier = GlanceModifier.height(6.dp))
-                Row(
-                    modifier = GlanceModifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Spacer(GlanceModifier.height(4.dp))
+                Text(
+                    next?.let { "Nächste: ${formatRelative(EmailScheduler.nextTriggerMs(it))}" } ?: "Nichts geplant",
+                    style = TextStyle(color = white, fontSize = 16.sp, fontWeight = FontWeight.Bold),
+                    maxLines = 1
+                )
+                if (next != null) {
+                    Text(next.displayTitle, style = TextStyle(color = soft, fontSize = 13.sp), maxLines = 1)
+                }
+                if (lastLog != null) {
+                    Spacer(GlanceModifier.height(8.dp))
+                    val ok = lastLog.status == EmailStatus.SENT
                     Text(
-                        text = "Aktiv: $activeCount",
-                        style = TextStyle(color = ColorProvider(android.graphics.Color.parseColor("#C7D2FE")))
-                    )
-                    Spacer(modifier = GlanceModifier.width(16.dp))
-                    Text(
-                        text = "Gesendet: $lastSentStr",
-                        style = TextStyle(color = ColorProvider(android.graphics.Color.parseColor("#A5B4FC")))
+                        (if (ok) "✓ Zuletzt gesendet " else "✗ Fehlgeschlagen ") + formatRelative(lastLog.sentTimeMs),
+                        style = TextStyle(color = ColorProvider(if (ok) Color(0xFF86EFAC) else Color(0xFFFCA5A5)), fontSize = 12.sp),
+                        maxLines = 1
                     )
                 }
-                Spacer(modifier = GlanceModifier.height(8.dp))
-                Button(
-                    text = "App öffnen",
-                    onClick = actionStartActivity<MainActivity>(),
-                    modifier = GlanceModifier.fillMaxWidth()
-                )
             }
         }
     }
@@ -102,10 +89,6 @@ class EmailBotWidget : GlanceAppWidget() {
 
 object EmailBotWidgetUpdater {
     suspend fun update(context: Context) {
-        try {
-            EmailBotWidget().updateAll(context)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        runCatching { EmailBotWidget().updateAll(context) }
     }
 }

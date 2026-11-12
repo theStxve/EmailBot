@@ -3,34 +3,32 @@ package com.example.emailbot.scheduler
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import androidx.work.*
-import java.util.concurrent.TimeUnit
+import com.example.emailbot.data.EmailTaskRepository
+import com.example.emailbot.data.isRecurring
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
- * Receives AlarmManager triggers and hands off to WorkManager for reliable
- * background execution (survives Doze mode, low memory pressure, etc.)
+ * Fired by AlarmManager. Registers the next alarm for recurring tasks right away
+ * (so the chain never breaks, whatever happens to this send) and hands the send to WorkManager.
  */
 class EmailAlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        val taskId = intent.getIntExtra("task_id", -1)
+        val taskId = intent.getIntExtra(EmailScheduler.EXTRA_TASK_ID, -1)
         if (taskId == -1) return
 
-        val data = workDataOf("task_id" to taskId)
-
-        val workRequest = OneTimeWorkRequestBuilder<EmailSendWorker>()
-            .setInputData(data)
-            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-            // Retry up to 3 times with exponential backoff for network failures
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
-            .addTag("email_send_$taskId")
-            .build()
-
-        WorkManager.getInstance(context)
-            .enqueueUniqueWork(
-                "email_send_$taskId",
-                ExistingWorkPolicy.REPLACE,
-                workRequest
-            )
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val task = EmailTaskRepository(context).getById(taskId) ?: return@launch
+                if (!task.isEnabled) return@launch
+                if (task.isRecurring) EmailScheduler.schedule(context, task)
+                EmailScheduler.enqueueSend(context, task, manual = false)
+            } finally {
+                pendingResult.finish()
+            }
+        }
     }
 }

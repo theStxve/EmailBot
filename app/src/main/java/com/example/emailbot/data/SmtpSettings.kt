@@ -15,79 +15,76 @@ private val Context.smtpDataStore by preferencesDataStore(name = "smtp_accounts"
 private val ACCOUNTS_KEY = stringPreferencesKey("accounts_json")
 
 private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+private val accountListSerializer = ListSerializer(SmtpSettings.serializer())
 
 @Serializable
 data class SmtpSettings(
     val id: Int            = 0,
     val accountName: String = "",
-    val host: String       = "smtp.gmail.com",
+    val host: String       = "",
     val port: Int          = 587,
     val username: String   = "",
+    /** Plain text in memory; stored encrypted (see [SecretCipher]). */
     val password: String   = "",
     val security: SecurityType = SecurityType.STARTTLS,
     val fromName: String   = ""
 )
 
-class SmtpSettingsRepository(private val context: Context) {
+val SmtpSettings.displayName: String
+    get() = accountName.ifBlank { username }
 
-    val accounts: Flow<List<SmtpSettings>> = context.smtpDataStore.data.map { prefs ->
-        val raw = prefs[ACCOUNTS_KEY] ?: return@map emptyList()
-        runCatching {
-            json.decodeFromString(ListSerializer(SmtpSettings.serializer()), raw)
-        }.getOrDefault(emptyList())
+class SmtpSettingsRepository(context: Context) {
+
+    private val dataStore = context.applicationContext.smtpDataStore
+
+    private fun decode(raw: String?): List<SmtpSettings> =
+        raw?.let { runCatching { json.decodeFromString(accountListSerializer, it) }.getOrNull() } ?: emptyList()
+
+    private fun encode(list: List<SmtpSettings>): String =
+        json.encodeToString(accountListSerializer, list.map { it.copy(password = SecretCipher.encrypt(it.password)) })
+
+    /** Accounts with decrypted passwords. The first account is the default. */
+    val accounts: Flow<List<SmtpSettings>> = dataStore.data.map { prefs ->
+        decode(prefs[ACCOUNTS_KEY]).map { it.copy(password = SecretCipher.decrypt(it.password)) }
     }
 
     suspend fun getAll(): List<SmtpSettings> = accounts.first()
 
     suspend fun getById(id: Int): SmtpSettings? = getAll().find { it.id == id }
 
-    suspend fun getDefault(): SmtpSettings = getAll().firstOrNull() ?: SmtpSettings()
+    /** Resolves the account a task should use: 0 means the default account. */
+    suspend fun resolve(accountId: Int): SmtpSettings? =
+        if (accountId == 0) getAll().firstOrNull() else getById(accountId)
 
     suspend fun save(settings: SmtpSettings): SmtpSettings {
         var saved = settings
-        context.smtpDataStore.edit { prefs ->
-            val current = prefs[ACCOUNTS_KEY]
-                ?.let { runCatching { json.decodeFromString(ListSerializer(SmtpSettings.serializer()), it) }.getOrDefault(emptyList()) }
-                ?: emptyList()
-
+        dataStore.edit { prefs ->
+            val current = decode(prefs[ACCOUNTS_KEY]).map { it.copy(password = SecretCipher.decrypt(it.password)) }
             val newList = if (settings.id == 0) {
-                val nextId = (current.maxOfOrNull { it.id } ?: 0) + 1
-                saved = settings.copy(id = nextId)
+                saved = settings.copy(id = (current.maxOfOrNull { it.id } ?: 0) + 1)
                 current + saved
             } else {
                 current.map { if (it.id == settings.id) settings else it }
             }
-            prefs[ACCOUNTS_KEY] = json.encodeToString(ListSerializer(SmtpSettings.serializer()), newList)
+            prefs[ACCOUNTS_KEY] = encode(newList)
         }
         return saved
     }
 
     suspend fun delete(id: Int) {
-        context.smtpDataStore.edit { prefs ->
-            val current = prefs[ACCOUNTS_KEY]
-                ?.let { runCatching { json.decodeFromString(ListSerializer(SmtpSettings.serializer()), it) }.getOrDefault(emptyList()) }
-                ?: emptyList()
-            prefs[ACCOUNTS_KEY] = json.encodeToString(ListSerializer(SmtpSettings.serializer()), current.filter { it.id != id })
+        dataStore.edit { prefs ->
+            val current = decode(prefs[ACCOUNTS_KEY]).map { it.copy(password = SecretCipher.decrypt(it.password)) }
+            prefs[ACCOUNTS_KEY] = encode(current.filter { it.id != id })
         }
     }
 
-    // Legacy shim: load the old SharedPreferences account and migrate it once
-    fun migrateLegacyIfNeeded(context: Context) {
-        val prefs = context.getSharedPreferences("smtp_settings", Context.MODE_PRIVATE)
-        val host = prefs.getString("host", null) ?: return
-        val username = prefs.getString("username", "") ?: ""
-        if (username.isBlank()) return
-        val legacy = SmtpSettings(
-            id          = 0,
-            accountName = username,
-            host        = host,
-            port        = prefs.getInt("port", 587),
-            username    = username,
-            password    = prefs.getString("password", "") ?: "",
-            security    = SecurityType.valueOf(prefs.getString("security", SecurityType.STARTTLS.name) ?: SecurityType.STARTTLS.name),
-            fromName    = prefs.getString("from_name", "") ?: ""
-        )
-        prefs.edit().clear().apply()
-        kotlinx.coroutines.runBlocking { save(legacy) }
+    /** Re-encrypts passwords that are still stored in plain text (from older app versions). */
+    suspend fun encryptLegacyPasswords() {
+        dataStore.edit { prefs ->
+            val raw = decode(prefs[ACCOUNTS_KEY])
+            if (raw.any { it.password.isNotEmpty() && !SecretCipher.isEncrypted(it.password) }) {
+                prefs[ACCOUNTS_KEY] = encode(raw.map { it.copy(password = SecretCipher.decrypt(it.password)) })
+            }
+        }
     }
 }

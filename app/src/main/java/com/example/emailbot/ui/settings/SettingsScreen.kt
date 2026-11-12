@@ -1,89 +1,113 @@
 package com.example.emailbot.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.emailbot.ui.appViewModelFactory
 import com.example.emailbot.data.SecurityType
-import com.example.emailbot.data.SmtpSettings
+import com.example.emailbot.mail.MailProviders
+import com.example.emailbot.theme.GradientTopBar
+import com.example.emailbot.theme.StatusFailed
+import com.example.emailbot.theme.StatusPending
+import com.example.emailbot.theme.StatusSuccess
 
-private val gradientHeader = Brush.linearGradient(
-    colors = listOf(Color(0xFF6366F1), Color(0xFF8B5CF6))
-)
-
-@OptIn(ExperimentalMaterial3Api::class)
+/** Create or edit one SMTP account. */
 @Composable
 fun SettingsScreen(
     accountId: Int?,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-    vm: SettingsViewModel = viewModel()
+    vm: SettingsViewModel = viewModel(factory = appViewModelFactory())
 ) {
-    val settings by vm.settings.collectAsStateWithLifecycle()
-    val saveResult by vm.saveResult.collectAsStateWithLifecycle()
-    val isTesting by vm.isTesting.collectAsStateWithLifecycle()
-    val testResult by vm.testResult.collectAsStateWithLifecycle()
-    var passwordVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(accountId) { vm.load(accountId) }
+    LaunchedEffect(Unit) { vm.saved.collect { onBack() } }
 
-    LaunchedEffect(accountId) {
-        vm.loadAccount(accountId)
-    }
-
-    LaunchedEffect(saveResult) {
-        if (saveResult != null) {
-            kotlinx.coroutines.delay(2000)
-            vm.clearSaveResult()
-            onBack()
-        }
-    }
+    val form by vm.form.collectAsStateWithLifecycle()
+    val portText by vm.portText.collectAsStateWithLifecycle()
+    val test by vm.test.collectAsStateWithLifecycle()
+    var passwordVisible by rememberSaveable { mutableStateOf(false) }
+    var showErrors by rememberSaveable { mutableStateOf(false) }
+    val errors = if (showErrors) vm.validate() else emptyMap()
+    val provider = MailProviders.forAddress(form.username) ?: MailProviders.forHost(form.host)
 
     Scaffold(
         topBar = {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(gradientHeader)
-                    .statusBarsPadding()
-            ) {
+            GradientTopBar(
+                title = if (accountId == null) "Neues Konto" else "Konto bearbeiten",
+                subtitle = provider?.let { "${it.name} erkannt" } ?: "SMTP-Zugang für den Versand",
+                onBack = onBack
+            )
+        },
+        bottomBar = {
+            Surface(tonalElevation = 3.dp, shadowElevation = 8.dp) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(16.dp)
                 ) {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Zurück", tint = Color.White)
-                    }
-                    Column {
-                        Text(
-                            text = if (accountId == null || accountId == 0) "Neues SMTP-Konto" else "Konto bearbeiten",
-                            color = Color.White,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text("Ausgehendes E-Mail Konto konfigurieren", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp)
-                    }
+                    OutlinedButton(
+                        onClick = { showErrors = true; vm.testConnection() },
+                        enabled = test != TestState.Running,
+                        modifier = Modifier.weight(1f).height(52.dp)
+                    ) { Text("Verbindung testen") }
+                    Button(
+                        onClick = { showErrors = true; vm.save() },
+                        modifier = Modifier.weight(1f).height(52.dp)
+                    ) { Text("Speichern") }
                 }
             }
-        },
-        modifier = modifier
+        }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -91,233 +115,154 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (saveResult != null) {
-                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF22C55E).copy(alpha = 0.15f))) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF22C55E))
-                        Spacer(Modifier.width(8.dp))
-                        Text(saveResult ?: "", color = Color(0xFF22C55E), fontWeight = FontWeight.Medium)
-                    }
-                }
+            when (val t = test) {
+                TestState.Idle -> Unit
+                TestState.Running -> Banner(null, "Verbinde mit ${form.host} …", MaterialTheme.colorScheme.primary)
+                TestState.Success -> Banner(Icons.Default.CheckCircle, "Verbindung erfolgreich. Das Konto ist startklar.", StatusSuccess)
+                is TestState.Failed -> Banner(Icons.Outlined.ErrorOutline, t.message, StatusFailed)
             }
 
-            SectionHeader("Konto")
-
-            OutlinedTextField(
-                value = settings.accountName,
-                onValueChange = { vm.updateSettings(settings.copy(accountName = it)) },
-                label = { Text("Konto-Name (z.B. GMX Privat)") },
-                placeholder = { Text("Mein SMTP-Konto") },
-                leadingIcon = { Icon(Icons.Default.Bookmark, null) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            OutlinedTextField(
-                value = settings.fromName,
-                onValueChange = { vm.updateSettings(settings.copy(fromName = it)) },
-                label = { Text("Absender Name") },
-                placeholder = { Text("Max Mustermann") },
-                leadingIcon = { Icon(Icons.Default.Person, null) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            OutlinedTextField(
-                value = settings.username,
-                onValueChange = { vm.updateSettings(settings.copy(username = it)) },
-                label = { Text("E-Mail Adresse / Benutzername") },
-                leadingIcon = { Icon(Icons.Default.Email, null) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            OutlinedTextField(
-                value = settings.password,
-                onValueChange = { vm.updateSettings(settings.copy(password = it)) },
-                label = { Text("Passwort / App-Passwort") },
-                leadingIcon = { Icon(Icons.Default.Lock, null) },
-                trailingIcon = {
-                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                        Icon(if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
-                    }
-                },
-                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            SectionHeader("Server")
-
-            OutlinedTextField(
-                value = settings.host,
-                onValueChange = { vm.updateSettings(settings.copy(host = it)) },
-                label = { Text("SMTP Server") },
-                placeholder = { Text("smtp.gmail.com") },
-                leadingIcon = { Icon(Icons.Default.Dns, null) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            OutlinedTextField(
-                value = settings.port.toString(),
-                onValueChange = { vm.updateSettings(settings.copy(port = it.toIntOrNull() ?: settings.port)) },
-                label = { Text("Port") },
-                leadingIcon = { Icon(Icons.Default.Lan, null) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            SectionHeader("Sicherheit")
-
-            SecurityType.entries.forEach { sec ->
-                val (label, hint) = when (sec) {
-                    SecurityType.STARTTLS -> "STARTTLS" to "Empfohlen · Port 587"
-                    SecurityType.SSL_TLS  -> "SSL / TLS" to "Sicher · Port 465"
-                    SecurityType.NONE     -> "Keine"     to "Nicht empfohlen"
-                }
-                Card(
-                    onClick = { vm.updateSettings(settings.copy(security = sec)) },
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (settings.security == sec)
-                            Color(0xFF6366F1).copy(alpha = 0.1f)
-                        else
-                            MaterialTheme.colorScheme.surface
-                    ),
-                    border = if (settings.security == sec)
-                        CardDefaults.outlinedCardBorder().copy()
-                    else null,
+            Section("Anmeldung") {
+                OutlinedTextField(
+                    value = form.username,
+                    onValueChange = { v -> vm.update { it.copy(username = v) } },
+                    label = { Text("E-Mail-Adresse") },
+                    placeholder = { Text("du@beispiel.de") },
+                    singleLine = true,
+                    isError = "username" in errors,
+                    supportingText = errors["username"]?.let { { Text(it) } },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = settings.security == sec, onClick = { vm.updateSettings(settings.copy(security = sec)) })
-                        Column(Modifier.weight(1f)) {
-                            Text(label, fontWeight = FontWeight.Medium)
-                            Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                )
+                OutlinedTextField(
+                    value = form.password,
+                    onValueChange = { v -> vm.update { it.copy(password = v) } },
+                    label = { Text(if (provider != null) "App-Passwort" else "Passwort") },
+                    singleLine = true,
+                    isError = "password" in errors,
+                    supportingText = errors["password"]?.let { { Text(it) } },
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                contentDescription = if (passwordVisible) "Passwort verbergen" else "Passwort anzeigen"
+                            )
                         }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (provider != null) {
+                    Row(verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Outlined.Lightbulb, null, tint = StatusPending, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(provider.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
 
-            SectionHeader("Schnelleinstellung")
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SmtpPresetButton("Gmail") {
-                    vm.updateSettings(settings.copy(host = "smtp.gmail.com", port = 587, security = SecurityType.STARTTLS))
-                }
-                SmtpPresetButton("Outlook") {
-                    vm.updateSettings(settings.copy(host = "smtp-mail.outlook.com", port = 587, security = SecurityType.STARTTLS))
-                }
-                SmtpPresetButton("GMX") {
-                    vm.updateSettings(settings.copy(host = "mail.gmx.net", port = 587, security = SecurityType.STARTTLS))
-                }
+            Section("Absender") {
+                OutlinedTextField(
+                    value = form.fromName,
+                    onValueChange = { v -> vm.update { it.copy(fromName = v) } },
+                    label = { Text("Angezeigter Name (optional)") },
+                    placeholder = { Text("Max Mustermann") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = form.accountName,
+                    onValueChange = { v -> vm.update { it.copy(accountName = v) } },
+                    label = { Text("Name des Kontos in der App (optional)") },
+                    placeholder = { Text(provider?.let { "${it.name} privat" } ?: "Arbeit") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
-            val username = settings.username.lowercase()
-            val adviceText = if (username.contains("@gmx") || username.contains("@web.de")) {
-                "Für GMX & Web.de: Schalte in deinem E-Mail-Postfach im Browser unter 'POP3 & IMAP' die Option 'IMAP und SMTP erlauben' frei. Andernfalls blockiert der Anbieter den Zugriff."
-            } else if (username.contains("@gmail") || username.contains("@outlook") || username.contains("@hotmail") || username.contains("@live")) {
-                "Für Gmail & Outlook: Aktiviere die 2-Faktor-Authentifizierung in deinem E-Mail-Konto und erstelle ein App-Passwort. Trage dieses App-Passwort anstelle deines normalen Passworts ein."
-            } else {
-                "Tipp: Die SMTP-Einstellungen werden für bekannte Domains (GMX, Web.de, Gmail, Outlook) beim Eintippen der E-Mail-Adresse automatisch ausgefüllt."
-            }
-
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF6366F1).copy(alpha = 0.08f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(Modifier.padding(12.dp)) {
-                    Icon(Icons.Default.Info, null, tint = Color(0xFF6366F1), modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
+            Section("Server") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = form.host,
+                        onValueChange = { v -> vm.update { it.copy(host = v) } },
+                        label = { Text("SMTP-Server") },
+                        placeholder = { Text("smtp.beispiel.de") },
+                        singleLine = true,
+                        isError = "host" in errors,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = portText,
+                        onValueChange = vm::updatePort,
+                        label = { Text("Port") },
+                        singleLine = true,
+                        isError = "port" in errors,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                Text("Verschlüsselung", style = MaterialTheme.typography.labelLarge)
+                val options = listOf(
+                    Triple(SecurityType.STARTTLS, "STARTTLS", 587),
+                    Triple(SecurityType.SSL_TLS, "SSL/TLS", 465),
+                    Triple(SecurityType.NONE, "Keine", 25)
+                )
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    options.forEachIndexed { i, (type, label, defaultPort) ->
+                        SegmentedButton(
+                            selected = form.security == type,
+                            onClick = {
+                                vm.update { it.copy(security = type) }
+                                // Switching encryption usually means switching to its standard port.
+                                if (portText in listOf("25", "465", "587", "")) vm.updatePort(defaultPort.toString())
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(i, options.size)
+                        ) { Text(label) }
+                    }
+                }
+                if (form.security == SecurityType.NONE) {
                     Text(
-                        text = adviceText,
+                        "Ohne Verschlüsselung gehen Passwort und E-Mail im Klartext durchs Netz.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF6366F1)
+                        color = StatusPending
                     )
                 }
             }
-
             Spacer(Modifier.height(8.dp))
-
-            if (isTesting) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color(0xFF6366F1))
-                        Spacer(Modifier.width(12.dp))
-                        Text("Verbindung wird getestet...", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            } else {
-                testResult?.let { result ->
-                    val isOk = result.contains("erfolgreich")
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isOk) Color(0xFF22C55E).copy(alpha = 0.15f) else MaterialTheme.colorScheme.errorContainer
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (isOk) Icons.Default.CheckCircle else Icons.Default.Warning,
-                                contentDescription = null,
-                                tint = if (isOk) Color(0xFF22C55E) else MaterialTheme.colorScheme.error
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = result,
-                                color = if (isOk) Color(0xFF22C55E) else MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
-                }
-            }
-
-            OutlinedButton(
-                onClick = { vm.testConnection() },
-                enabled = !isTesting && settings.username.isNotBlank() && settings.password.isNotBlank(),
-                modifier = Modifier.fillMaxWidth().height(48.dp)
-            ) {
-                Icon(Icons.Default.Bolt, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Verbindung testen")
-            }
-
-            Button(
-                onClick = { vm.save() },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
-            ) {
-                Icon(Icons.Default.Save, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Konto speichern", fontSize = 15.sp)
-            }
         }
     }
 }
 
 @Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelLarge,
-        color = Color(0xFF6366F1),
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(top = 4.dp)
-    )
+private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+            content()
+        }
+    }
 }
 
 @Composable
-private fun SmtpPresetButton(name: String, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
-        Text(name, fontSize = 12.sp)
+private fun Banner(icon: ImageVector?, text: String, color: Color) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.12f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) Icon(icon, null, tint = color)
+            else CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = color)
+            Spacer(Modifier.width(12.dp))
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+        }
     }
 }

@@ -32,6 +32,7 @@ data class EmailTask(
     val lastErrorMessage: String = "",
     val label: String            = "",
 
+    /** 0 = use the default (first) SMTP account. */
     val smtpAccountId: Int = 0,
 
     val attachmentPath: String = "",
@@ -41,3 +42,23 @@ data class EmailTask(
     val requireCharging: Boolean = false,
     val requireMinBattery: Int   = 0
 )
+
+/** Smallest interval a periodic task may use. Shorter intervals get throttled by Android anyway. */
+const val MIN_INTERVAL_MINUTES = 1.0
+
+val EmailTask.isRecurring: Boolean
+    get() = scheduleType != ScheduleType.ONCE
+
+/**
+ * A task is "active" when it still has an upcoming send.
+ * A failed one-time task is not active: it is only sent again when the user retries it.
+ */
+val EmailTask.isActive: Boolean
+    get() = isEnabled && when (status) {
+        EmailStatus.PENDING -> true
+        EmailStatus.FAILED  -> isRecurring
+        EmailStatus.SENT, EmailStatus.PAUSED -> false
+    }
+
+val EmailTask.displayTitle: String
+    get() = label.ifBlank { subject.ifBlank { "(kein Betreff)" } }

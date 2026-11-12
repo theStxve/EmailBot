@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">EmailBot</string>
+    <string name="widget_description">Zeigt die nächste geplante E-Mail und den letzten Versand</string>
 </resources>

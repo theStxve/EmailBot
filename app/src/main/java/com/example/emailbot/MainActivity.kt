@@ -1,74 +1,28 @@
 package com.example.emailbot
 
-import android.app.AlarmManager
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
+import android.graphics.Color
 import android.os.Bundle
-import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.ui.Modifier
-import com.example.emailbot.scheduler.EmailSchedulerService
+import com.example.emailbot.scheduler.Notifications
 import com.example.emailbot.theme.EmailBotTheme
 
+/**
+ * Permissions are not requested on start. The task list shows a card with whatever
+ * is still missing, so the user decides when to grant it.
+ */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-
-        requestExactAlarmPermissionIfNeeded()
-        requestIgnoreBatteryOptimizationIfNeeded()
-        requestNotificationPermissionIfNeeded()
-
-        // Start the foreground scheduling service — keeps alarms alive on all devices
-        EmailSchedulerService.start(this)
+        // Every screen has the dark indigo header behind the status bar, so its icons are always white.
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT))
+        Notifications.createChannels(this)
 
         setContent {
             EmailBotTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    MainNavigation()
-                }
-            }
-        }
-    }
-
-    /** On Android 13+ (API 33+) we need to request runtime permission for notifications */
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
-            }
-        }
-    }
-
-    /** On Android 12+ the user must explicitly grant SCHEDULE_EXACT_ALARM in Settings. */
-    private fun requestExactAlarmPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            if (!alarmManager.canScheduleExactAlarms()) {
-                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
-                    data = Uri.parse("package:$packageName")
-                }
-                startActivity(intent)
-            }
-        }
-    }
-
-    /** Ask user to exempt this app from battery optimization — required for reliable background sending. */
-    private fun requestIgnoreBatteryOptimizationIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val pm = getSystemService(android.os.PowerManager::class.java)
-            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:$packageName")
-                }
-                startActivity(intent)
+                MainNavigation()
             }
         }
     }

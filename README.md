@@ -1,111 +1,114 @@
+<div align="center">
+
+<img src="docs/icon.png" alt="EmailBot" width="112" />
+
 # EmailBot
 
-An autonomous, battery-optimized Android background email scheduling engine. It sends automated emails according to exact schedules, even while the device is sleeping, in Doze mode, or after a system restart.
+**Plan emails on your Android phone. They go out on time, even while it sleeps.**
 
----
+[![Android 7.0+](https://img.shields.io/badge/Android-7.0%2B-3DDC84?logo=android&logoColor=white)](#building)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.1-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-6366F1)](LICENSE)
 
-## Key Features
+<br />
 
-* **Scheduled Sending**  
-  * **One-Time:** Send a single email at a specific date and time.
-  * **Periodic:** Send repeatedly at fixed minute intervals.
-  * **Cron-like Recurrence:** Send on specific days of the week (or daily) at a precise time (e.g., *every Monday at 09:00*).
-* **Multi-Account SMTP Management**  
-  * Add, edit, test, and delete multiple SMTP configurations.
-  * Assign a specific sender account to each email schedule.
-* **Smart Conditional Triggers**  
-  * **Wi-Fi only:** Prevent using mobile data for attachments.
-  * **Charging only:** Defer sending until the phone is plugged in to protect battery life.
-  * **Battery threshold:** Block execution if the battery is below a user-defined percentage.
-* **Attachments Support**  
-  * Pick and copy any document, photo, or file to the app's secure internal sandbox to send as an attachment.
-* **Tap-to-Test Connection**  
-  * Verify SMTP host, authentication credentials, port, and SSL/TLS Handshakes directly in the settings before saving.
-* **Jetpack Glance Widget**  
-  * A modern, responsive home screen widget showing active schedule counts and the status of the last sent email.
-* **JSON Backup & Restore**  
-  * Export all active tasks as a JSON file via Android's Share Sheet. Import them back on any device with one tap.
+<img src="docs/screenshots/schedule.png" alt="Scheduled emails" width="31%" />&nbsp;
+<img src="docs/screenshots/editor.png" alt="Email editor" width="31%" />&nbsp;
+<img src="docs/screenshots/account.png" alt="Account setup" width="31%" />
 
----
+</div>
 
-## Architecture: 100% Background Autonomy
+<br />
 
-To guarantee scheduled emails are sent reliably on modern Android versions (with aggressive battery savers, Doze mode, and vendor-specific process management), EmailBot uses a multi-layered background architecture:
+## Features
+
+- **Three ways to schedule.** Once at a set time, every *n* minutes, or every week (or day) at a fixed time.
+- **Always shows the next send.** Every email shows when it goes out next and when it last went out.
+- **Several sender accounts.** Gmail, Outlook, GMX, WEB.DE, iCloud and Yahoo are set up automatically from the address. Any other SMTP server works too. Test the connection before you save.
+- **Send conditions.** Only on Wi-Fi, only while charging, or only above a battery level. If a condition isn't met, the email waits for it.
+- **Attachments.** Files are copied into the app, so they're still there at send time.
+- **Clear errors.** Failed sends show a readable reason in the list, in the history and as a notification.
+- **Widget, backup and dark mode.** A home screen widget shows the next send, JSON backup and restore moves your schedules to another phone, and the app follows the system theme.
+
+> The app is currently in German only.
+
+<div align="center">
+<img src="docs/screenshots/errors.png" alt="Failed send with reason" width="31%" />&nbsp;
+<img src="docs/screenshots/history.png" alt="Send history" width="31%" />&nbsp;
+<img src="docs/screenshots/dark.png" alt="Dark mode" width="31%" />
+</div>
+
+## How it works
 
 ```mermaid
-graph TD
-    A[Task Editor Dialog] -->|Save| B(DataStore Task Database)
-    B -->|Schedule| C[EmailScheduler]
-    C -->|AlarmManager Exact Alarm| D[EmailAlarmReceiver]
-    D -->|Hands off| E[WorkManager expedited job]
-    E -->|Launches| F[EmailSendWorker]
-    F -->|Sends email| G[JavaMail SMTP Server]
-    F -->|Triggers| H[EmailBotWidgetUpdater]
-    
-    I[Device Booted] -->|ACTION_BOOT_COMPLETED| J[BootReceiver]
-    J -->|Re-schedule active tasks| C
-    J -->|Restart| K[EmailSchedulerService]
-    
-    K -->|Heartbeat update| L[Persistent Notification]
+flowchart LR
+    A[AlarmManager<br/>exact alarm] --> R[EmailAlarmReceiver]
+    R -->|recurring: next alarm| A
+    R -->|enqueue with constraints| W[EmailSendWorker]
+    W --> S[(SMTP server)]
+    W --> L[(History + widget)]
+    B[BootReceiver] -->|reboot · update · time zone| A
 ```
 
-1. **`AlarmManager` (Exact Alarms):** Used to wake up the system at the exact millisecond of the scheduled run, bypassing standard Android sync grouping.
-2. **`WorkManager` (Expedited Workers):** Once `AlarmManager` fires, it immediately hands execution over to an *expedited* `CoroutineWorker`. This gives the job immediate execution priority and system resources, even in Doze mode.
-3. **`Foreground Service`:** A lightweight foreground service runs a silent heartbeat loop to keep the scheduler process prioritized, preventing aggressive OEM firmware (like Samsung, Xiaomi, or Huawei) from putting the app to sleep.
-4. **`BootReceiver`:** Automatically restores all schedules from the database when the device restarts.
+- **AlarmManager** wakes the phone at the scheduled time, even in Doze mode.
+- **EmailAlarmReceiver** registers the *next* alarm right away for recurring emails, so a failed send never breaks the schedule. It then hands the send to WorkManager.
+- **WorkManager** waits for the conditions (network, Wi-Fi, charging), sends, and retries network errors three times. Errors a retry can't fix, like a wrong password, fail right away.
+- **BootReceiver** registers the alarms again after a reboot, an app update or a time zone change.
+- A quiet **foreground service** runs only while something is scheduled. It keeps OEM battery savers (Samsung, Xiaomi …) from killing the app.
 
----
+## Setting up an account
 
-## Tech Stack & Dependencies
+Enter your address and the server settings fill in by themselves. Most providers need one step in their web settings first:
 
-* **UI:** Jetpack Compose + Material 3
-* **Navigation:** `androidx.navigation3` (Declarative Type-safe Navigation)
-* **Background Processing:** WorkManager + AlarmManager
-* **Database & Persistence:** Jetpack DataStore (Preferences + kotlinx.serialization)
-* **SMTP Client:** JavaMail for Android (`com.sun.mail:android-mail`)
-* **Home Screen Widget:** Jetpack Glance AppWidget
+| Provider | What to do first |
+|---|---|
+| Gmail | Turn on 2-step verification and create an [app password](https://myaccount.google.com/apppasswords). |
+| Outlook / Hotmail | Create an app password in your Microsoft account's security settings. |
+| GMX · WEB.DE | Allow *POP3/IMAP and SMTP* under *Settings → POP3 & IMAP*. |
+| iCloud | Create an app-specific password at [appleid.apple.com](https://appleid.apple.com). |
+| Yahoo | Create an app password in your account security settings. |
 
----
+## Permissions
 
-## SMTP Server Presets
+The app asks in a card at the top of the list, never in pop-ups on start:
 
-When creating an account, the app automatically populates settings for known email providers. Refer to this setup guide if you want to configure them manually:
+| Permission | Why |
+|---|---|
+| Alarms & reminders | Send at the exact minute. Granted automatically on Android 13+. |
+| Unrestricted battery use | Keeps Android from postponing sends while the phone is idle. |
+| Notifications | Tells you when an email could not be sent. |
 
-| Provider | Host | Port | Security Protocol | Required Action |
-|---|---|---|---|---|
-| **Gmail** | `smtp.gmail.com` | `587` | `STARTTLS` | Enable 2FA, generate and use an **App Password**. |
-| **Outlook / Hotmail** | `smtp-mail.outlook.com` | `587` | `STARTTLS` | Generate and use an **App Password**. |
-| **GMX** | `mail.gmx.net` | `587` | `STARTTLS` | Turn on **IMAP/SMTP access** in your GMX browser settings. |
-| **Web.de** | `smtp.web.de` | `587` | `STARTTLS` | Turn on **IMAP/SMTP access** in your Web.de browser settings. |
+## Building
 
----
-
-## Required Permissions
-
-For the app to work reliably in the background, you must grant the following permission requests when prompted inside the app:
-
-* **Exakte Alarme erlauben (SCHEDULE_EXACT_ALARM):** Allows the system to wake up exactly at your scheduled time.
-* **Akku-Optimierung umgehen (REQUEST_IGNORE_BATTERY_OPTIMIZATIONS):** Prevents Android from killing the background service or delaying workers when the device is left idle.
-* **Benachrichtigungen erlauben (POST_NOTIFICATIONS):** Used to display the persistent background status notification and notify you when an email is sent.
-
----
-
-## How to Build
-
-1. Clone this repository.
-2. Open the project in Android Studio (Jellyfish or newer recommended).
-3. Build the project or run the gradle commands directly:
+Requires Android Studio (recent stable) and JDK 17.
 
 ```bash
-# Build Debug APK
-./gradlew assembleDebug
-
-# Install directly to your connected device
-./gradlew installDebug
+./gradlew assembleDebug        # build → app/build/outputs/apk/debug/
+./gradlew installDebug         # install on a connected device
+./gradlew testDebugUnitTest    # run the unit tests
 ```
 
----
+<details>
+<summary><b>Project structure</b></summary>
+
+```
+app/src/main/java/com/example/emailbot/
+├── data/        tasks, accounts, send log (DataStore + kotlinx.serialization), password encryption
+├── mail/        SMTP client and provider presets (JavaMail)
+├── scheduler/   alarms, WorkManager worker, boot receiver, foreground service, notifications
+├── ui/          Jetpack Compose screens (Material 3, Navigation 3)
+├── widget/      home screen widget (Glance)
+└── theme/       colors, theme, shared header
+```
+
+</details>
+
+## Privacy & security
+
+- SMTP passwords are encrypted with a key from the Android Keystore that never leaves the device.
+- Accounts are excluded from Android's cloud backup and device transfer. The JSON export contains your schedules, never your accounts or passwords.
+- Emails go straight from your phone to your mail provider. There is no server in between and no tracking.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+[MIT](LICENSE)
